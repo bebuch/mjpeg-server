@@ -16,6 +16,7 @@
 
 namespace http{ namespace server{
 
+
 	server::server(
 		const std::string& address,
 		const std::string& port,

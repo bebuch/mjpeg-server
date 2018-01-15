@@ -18,7 +18,7 @@ project mjpeg-server
 	<define>BOOST_HANA_CONFIG_ENABLE_STRING_UDL
 	<define>BOOST_ASIO_HAS_STD_CHRONO
 
-	<toolset>gcc:<cxxflags>-std=gnu++1z
+	<toolset>gcc:<cxxflags>-std=gnu++1y
 	<toolset>gcc:<cxxflags>-fconstexpr-depth=1024
 	<toolset>gcc:<linkflags>-lpthread
 	<toolset>gcc:<linkflags>-ldl
@@ -45,4 +45,6 @@ exe mjpeg-server
 	/boost//system
     /boost//thread
 	:
+	<linkflags>-lraspicam
+	<linkflags>-lturbojpeg
 	;
