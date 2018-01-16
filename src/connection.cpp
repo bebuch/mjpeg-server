@@ -12,11 +12,62 @@
 #include <mjpeg-server/connection_manager.hpp>
 #include <mjpeg-server/request_handler.hpp>
 
+#include <raspicam/raspicam.h>
+
+#include <turbojpeg.h>
+
+#include <iostream>
 #include <utility>
 #include <vector>
 
 
 namespace http{ namespace server{
+
+
+	std::string to_jpg_image(
+		std::uint8_t const* img,
+		std::size_t const width,
+		std::size_t const height,
+		int const quality
+	){
+		// JPEG encoding
+		auto compressor_deleter = [](void* data){ tjDestroy(data); };
+		std::unique_ptr< void, decltype(compressor_deleter) > compressor(
+			tjInitCompress(),
+			compressor_deleter
+		);
+		if(!compressor) throw std::runtime_error("tjInitCompress failed");
+
+		// Image buffer
+		std::uint8_t* data = nullptr;
+		unsigned long size = 0;
+
+		if(tjCompress2(
+			compressor.get(),
+			const_cast< std::uint8_t* >(img),
+			static_cast< int >(width),
+			static_cast< int >(width * 3),
+			static_cast< int >(height),
+			TJPF_RGB,
+			&data,
+			&size,
+			TJSAMP_420,
+			quality,
+			0
+		) != 0){
+			throw std::runtime_error(std::string("tjCompress2 failed: ")
+				+ tjGetErrorStr());
+		}
+
+		auto data_deleter = [](std::uint8_t* data){ tjFree(data); };
+		std::unique_ptr< std::uint8_t, decltype(data_deleter) > data_ptr(
+			data,
+			data_deleter
+		);
+
+		// output
+		return std::string(data_ptr.get(), data_ptr.get() + size);
+	}
 
 
 	connection::connection(
@@ -47,8 +98,45 @@ namespace http{ namespace server{
 							request_, buffer_.data(), buffer_.data() + bytes_transferred);
 
 					if(result == request_parser::good){
-						request_handler_.handle_request(request_, reply_);
-						do_write();
+						bool is_mjpeg
+							= request_handler_.handle_request(request_, reply_);
+
+						if(!is_mjpeg){
+							do_write();
+							return;
+						}
+
+						try{
+							boost::asio::write(socket_, reply_.to_buffers());
+
+							raspicam::RaspiCam cam_;
+							cam_.setFormat(raspicam::RASPICAM_FORMAT_BGR);
+							if(!cam_.open(true)){
+								throw std::runtime_error("Can not connect to raspicam");
+							}
+
+							for(;;){
+								cam_.grab();
+								auto const width = cam_.getWidth();
+								auto const height = cam_.getHeight();
+								std::cout << "grab image: " << width << "x" << height << std::endl;
+								std::uint8_t const* const data = cam_.getImageBufferData();
+								if(data == nullptr){
+									throw std::runtime_error("raspicam getImageBufferData failed");
+								}
+								auto img = to_jpg_image(data, width, height, 75);
+								auto content =
+									"--mjpeg\r\n"
+									"Content-Type:image/jpeg\r\n"
+									"Content-Length:" + std::to_string(img.size()) + img + "\r\n"
+									"\r\n" + img + "\r\n";
+								boost::asio::write(socket_, boost::asio::buffer(content));
+								std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+							}
+						}catch(std::exception& e){
+							std::cout << "exception: " << e.what() << "\n";
+							connection_manager_.stop(shared_from_this());
+						}
 					}else if(result == request_parser::bad){
 						reply_ = reply::stock_reply(reply::bad_request);
 						do_write();
